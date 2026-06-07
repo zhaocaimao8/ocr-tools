@@ -134,13 +134,17 @@ def preprocess(img, save_debug=False):
 
 # ----- OCR调用 -----
 
-def ocr(img, retries=2):
+def ocr(img, retries=2, decode_qr=False):
     """Umi-OCR API 识别，带重试"""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    data = json.dumps({"base64": b64}).encode()
+    payload = {"base64": b64}
+    if decode_qr:
+        # 启用二维码/条形码识别
+        payload["options"] = {"decode_bar": True, "decode_qrcode": True}
+    data = json.dumps(payload).encode()
 
     last_err = None
     for attempt in range(1 + retries):
@@ -204,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--screen", type=str, default=None,
                         help="屏幕绝对坐标 x1,y1,x2,y2（自动换算为窗口内坐标）")
     parser.add_argument("--color", action="store_true", help="同时分析颜色（主色调/分布/色温等）")
+    parser.add_argument("--qr", action="store_true", help="同时识别二维码/条形码")
     parser.add_argument("--save-debug", action="store_true", help="保存预处理图到桌面")
     args = parser.parse_args()
 
@@ -278,7 +283,7 @@ if __name__ == "__main__":
                     break
 
         # 先清掉旧结果，避免读到上次的
-        result_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "截图存档", "_框选结果.txt")
+        result_file = os.path.join("D:/Umi-OCR", "截图存档", "_框选结果.txt")
         try:
             os.remove(result_file)
         except:
@@ -288,6 +293,8 @@ if __name__ == "__main__":
         sel_args = [sys.executable, sel_tool, "--output-file", result_file]
         if args.color:
             sel_args.append("--color")
+        if args.qr:
+            sel_args.append("--qr")
         subprocess.run(sel_args, timeout=600)
 
         # 切回聊天（AttachThreadInput 绕过前台锁）
@@ -390,7 +397,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     # 自动保存截图原图
-    save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "截图存档")
+    save_dir = os.path.join("D:/Umi-OCR", "截图存档")
     os.makedirs(save_dir, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     save_path = os.path.join(save_dir, f"截图_{timestamp}.png")
@@ -406,7 +413,7 @@ if __name__ == "__main__":
 
     # OCR
     try:
-        texts = ocr(processed)
+        texts = ocr(processed, decode_qr=args.qr)
     except RuntimeError as e:
         print(e)
         sys.exit(1)
@@ -414,12 +421,42 @@ if __name__ == "__main__":
         print(f"OCR 识别异常: {e}")
         sys.exit(1)
 
+    # --qr 额外用 pyzbar 本地解码（不依赖 Umi-OCR 的二维码功能）
+    qr_results = []
+    if args.qr:
+        try:
+            from pyzbar.pyzbar import decode as qr_decode, ZBarSymbol
+            seen = set()
+            # 原图 + 缩小 0.7x 分别扫一次，提高小二维码检出率
+            for scale in [1.0, 0.7]:
+                if scale != 1.0:
+                    w, h = img.size
+                    scaled = img.resize((int(w*scale), int(h*scale)))
+                else:
+                    scaled = img
+                qr_codes = qr_decode(scaled, symbols=[ZBarSymbol.QRCODE])
+                for qr in qr_codes:
+                    data = qr.data.decode('utf-8', errors='replace')
+                    key = data[:50]
+                    if key not in seen:
+                        seen.add(key)
+                        qr_results.append(f"[{qr.type}] {data}")
+        except ImportError:
+            pass
+
     # 输出结果
     if not texts:
         print("（未识别到文字）")
     else:
         for t in texts:
             print(t)
+
+    # 输出二维码/条形码结果
+    if qr_results:
+        print()
+        print("📱 识别到二维码/条码:")
+        for q in qr_results:
+            print(f"  {q}")
 
     # --color 颜色分析
     if args.color:

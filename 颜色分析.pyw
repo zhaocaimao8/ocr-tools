@@ -206,7 +206,7 @@ def analyze_colors(img_path):
 
     import os
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    out_dir = os.path.join(script_dir, "截图存档")
+    out_dir = os.path.join("D:/Umi-OCR", "截图存档")
     os.makedirs(out_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(img_path))[0]
     hist_path = os.path.join(out_dir, base + '_histogram.png')
@@ -262,7 +262,7 @@ class App:
             self.text.delete(1.0, tk.END)
             self.text.insert(1.0, result)
             fname = path.split('/')[-1].split('\\')[-1]
-            self.status.config(text=f'{fname}   |   结果: 截图存档/')
+            self.status.config(text=f'{fname}   |   结果: D:/Umi-OCR/截图存档/')
         except Exception as e:
             messagebox.showerror('错误', str(e))
             self.status.config(text='分析失败')

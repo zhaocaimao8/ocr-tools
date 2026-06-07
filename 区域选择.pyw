@@ -20,6 +20,7 @@ if "--output-file" in sys.argv:
             pass
 
 COLOR_FLAG = "--color" in sys.argv
+QR_FLAG = "--qr" in sys.argv
 
 # ---- DPI 感知（确保坐标和截图一致）----
 ctypes.windll.user32.SetProcessDPIAware()
@@ -63,22 +64,29 @@ def capture_region(x1, y1, x2, y2):
 
 # ---- OCR 调用 ----
 
-def run_ocr_from_image(pil_img):
+def run_ocr_from_image(pil_img, decode_qr=False):
     """直接对 PIL Image 做 OCR，返回文字列表"""
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-    data = json.dumps({"base64": b64}).encode()
+    payload = {"base64": b64}
+    if decode_qr:
+        payload["options"] = {"decode_bar": True, "decode_qrcode": True}
+    data = json.dumps(payload).encode()
     req = urllib.request.Request(
         "http://127.0.0.1:1224/api/ocr", data=data,
         headers={"Content-Type": "application/json"}
     )
     res = json.loads(urllib.request.urlopen(req, timeout=30).read())
     texts = []
-    for item in res.get("data", []):
-        t = item.get("text", "").strip()
-        if t:
-            texts.append(t)
+    if isinstance(res, dict):
+        items = res.get("data", [])
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    t = item.get("text", "").strip()
+                    if t:
+                        texts.append(t)
     return texts
 
 # ---- 选择逻辑 ----
@@ -187,12 +195,37 @@ def do_ocr_local(raw_img):
     """预处理 → OCR → 可选颜色分析 → 保存/显示"""
     try:
         processed = preprocess_ocr(raw_img)
-        texts = run_ocr_from_image(processed)
+        texts = run_ocr_from_image(processed, decode_qr=QR_FLAG)
         lines = texts if texts else ["（未识别到文字）"]
+
+        # --qr 额外用 pyzbar 本地解码
+        if QR_FLAG:
+            try:
+                from pyzbar.pyzbar import decode as qr_decode, ZBarSymbol
+                seen = set()
+                qr_out = []
+                for scale in [1.0, 0.7]:
+                    if scale != 1.0:
+                        w, h = raw_img.size
+                        scaled = raw_img.resize((int(w*scale), int(h*scale)))
+                    else:
+                        scaled = raw_img
+                    for qr in qr_decode(scaled, symbols=[ZBarSymbol.QRCODE]):
+                        data = qr.data.decode('utf-8', errors='replace')
+                        key = data[:50]
+                        if key not in seen:
+                            seen.add(key)
+                            qr_out.append(f"  [{qr.type}] {data}")
+                if qr_out:
+                    lines.append("")
+                    lines.append("📱 二维码/条码:")
+                    lines.extend(qr_out)
+            except ImportError:
+                pass
 
         # --color 颜色分析
         if COLOR_FLAG:
-            save_dir = os.path.join(os.path.dirname(__file__), "截图存档")
+            save_dir = os.path.join("D:/Umi-OCR", "截图存档")
             os.makedirs(save_dir, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
             try:
